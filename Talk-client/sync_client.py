@@ -394,60 +394,64 @@ class SyncClient:
 
     def _listener_thread(self):
         """
-        Thread qui écoute les notifications entrantes du serveur.
-
-        Le serveur peut envoyer un OP_NOTIFY à tout moment
-        (quand un autre client uploade un fichier).
-        Ce thread tourne en arrière-plan et réagit.
+        Thread d'écoute avec sa propre socket dédiée et reconnexion auto.
+        Complètement indépendant des autres opérations.
         """
-        self._log("Listener démarré, en attente de notifications...")
-
-        while self.connected:
+        while True:
             try:
-                # Lit l'opcode (1 octet) → doit être OP_NOTIFY
-                raw_opcode = self._recv_all(1)
-                opcode = raw_opcode[0]
+                # Ouvre une socket dédiée uniquement pour écouter
+                listener_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                listener_sock.settimeout(5)
+                listener_sock.connect((self.server_host, self.server_port))
+                listener_sock.settimeout(None)
 
-                if opcode == OP_NOTIFY:
-                    # Lit l'action (1 octet) : OP_UPLOAD ou OP_DELETE
-                    action = self._recv_all(1)[0]
+                self._log("Listener démarré, en attente de notifications...")
 
-                    # Lit la longueur du nom (2 octets)
-                    raw_len  = self._recv_all(2)
-                    name_len = struct.unpack('!H', raw_len)[0]
+                def recv_exact(n):
+                    data = b''
+                    while len(data) < n:
+                        chunk = listener_sock.recv(n - len(data))
+                        if not chunk:
+                            raise ConnectionError("Connexion fermée")
+                        data += chunk
+                    return data
 
-                    # Lit le nom du fichier
-                    filename = self._recv_all(name_len).decode('utf-8')
+                # Boucle d'écoute
+                while True:
+                    raw_opcode = recv_exact(1)
+                    opcode = raw_opcode[0]
 
-                    if action == OP_UPLOAD:
-                        self._log(f"'{filename}' mis à jour par un collègue → téléchargement...")
-                        # Télécharge automatiquement le fichier dans ~/SafeSync
-                        self.download_file(filename)
-                        if self.on_notify:
-                            self.on_notify(filename)
+                    if opcode == OP_NOTIFY:
+                        action   = recv_exact(1)[0]
+                        name_len = struct.unpack('!H', recv_exact(2))[0]
+                        filename = recv_exact(name_len).decode('utf-8')
 
-                    elif action == OP_DELETE:
-                        self._log(f"'{filename}' supprimé par un collègue → suppression locale...")
-                        local_path = os.path.join(self.sync_folder, filename)
-                        if os.path.exists(local_path):
-                            os.remove(local_path)
-                            self._log(f"'{filename}' supprimé localement ✓")
-                        if self.on_notify:
-                            self.on_notify(filename)
+                        if action == OP_UPLOAD:
+                            self._log(f"'{filename}' mis à jour → téléchargement...")
+                            self.download_file(filename)
+                            if self.on_notify:
+                                self.on_notify(filename)
 
-            except (ConnectionError, OSError):
-                self._log("Listener : connexion perdue")
-                self._disconnect()
-                break
+                        elif action == OP_DELETE:
+                            self._log(f"'{filename}' supprimé par un collègue...")
+                            local_path = os.path.join(self.sync_folder, filename)
+                            if os.path.exists(local_path):
+                                os.remove(local_path)
+                                self._log(f"'{filename}' supprimé localement ✓")
+                            if self.on_notify:
+                                self.on_notify(filename)
+
+            except (ConnectionError, OSError) as e:
+                self._log(f"Listener déconnecté : {e} — reconnexion dans 5s...")
+                try:
+                    listener_sock.close()
+                except:
+                    pass
+                time.sleep(5)  # Attend avant de reconnecter
 
     def _start_threads(self):
         """Lance les threads en mode daemon (s'arrêtent avec le programme)."""
         threading.Thread(target=self._sender_thread,
                          daemon=True, name="SafeSync-Sender").start()
-
-        # Essaie une première connexion, puis démarre le listener
-        if self._connect():
-            threading.Thread(target=self._listener_thread,
-                             daemon=True, name="SafeSync-Listener").start()
-        else:
-            self._log("Démarrage hors-ligne, les fichiers seront envoyés à la reconnexion")
+        threading.Thread(target=self._listener_thread,
+                         daemon=True, name="SafeSync-Listener").start()
