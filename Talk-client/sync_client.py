@@ -227,8 +227,16 @@ class SyncClient:
         """Notifie le serveur qu'un fichier a été supprimé."""
         self.upload_queue.put(('delete', filename))
 
+    def _new_connection(self):
+        """Ouvre une nouvelle connexion TCP dédiée à une opération."""
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(10)
+        sock.connect((self.server_host, self.server_port))
+        sock.settimeout(None)
+        return sock
+
     def _do_upload(self, filepath):
-        """Exécution réelle de l'upload (appelée par le sender thread)."""
+        """Exécution réelle de l'upload via une connexion dédiée."""
         if not os.path.exists(filepath):
             self._log(f"Fichier introuvable, annulé : {filepath}")
             return
@@ -239,33 +247,52 @@ class SyncClient:
 
         self._log(f"Upload de '{filename}' ({file_size} octets)...")
 
-        # Envoie le header
-        header = build_header(OP_UPLOAD, filename, file_size, file_hash)
-        self._send_all(header)
+        try:
+            sock = self._new_connection()
 
-        # Envoie le fichier par chunks
-        with open(filepath, 'rb') as f:
-            sent = 0
-            while chunk := f.read(BUFFER_SIZE):
-                self._send_all(chunk)
-                sent += len(chunk)
+            # Envoie le header
+            header = build_header(OP_UPLOAD, filename, file_size, file_hash)
+            sock.sendall(header)
 
-        # Attend l'ACK du serveur
-        ack = self._recv_all(1)
-        if ack[0] == OP_ACK:
-            self._log(f"'{filename}' synchronisé avec succès ✓")
-        else:
-            self._log(f"Erreur serveur pour '{filename}'")
+            # Envoie le fichier par chunks
+            with open(filepath, 'rb') as f:
+                while chunk := f.read(BUFFER_SIZE):
+                    sock.sendall(chunk)
+
+            # Attend l'ACK
+            ack = b''
+            while len(ack) < 1:
+                ack += sock.recv(1)
+
+            if ack[0] == OP_ACK:
+                self._log(f"'{filename}' synchronisé avec succès ✓")
+            else:
+                self._log(f"Erreur serveur pour '{filename}'")
+
+            sock.close()
+
+        except Exception as e:
+            self._log(f"Erreur upload '{filename}' : {e}")
 
     def _do_delete(self, filename):
-        """Exécution réelle de la suppression."""
+        """Exécution réelle de la suppression via une connexion dédiée."""
         self._log(f"Suppression de '{filename}' sur le serveur...")
-        header = build_header(OP_DELETE, filename, 0)
-        self._send_all(header)
+        try:
+            sock = self._new_connection()
+            header = build_header(OP_DELETE, filename, 0)
+            sock.sendall(header)
 
-        ack = self._recv_all(1)
-        if ack[0] == OP_ACK:
-            self._log(f"'{filename}' supprimé sur le serveur ✓")
+            ack = b''
+            while len(ack) < 1:
+                ack += sock.recv(1)
+
+            if ack[0] == OP_ACK:
+                self._log(f"'{filename}' supprimé sur le serveur ✓")
+
+            sock.close()
+
+        except Exception as e:
+            self._log(f"Erreur delete '{filename}' : {e}")
 
     def download_file(self, filename):
         """
