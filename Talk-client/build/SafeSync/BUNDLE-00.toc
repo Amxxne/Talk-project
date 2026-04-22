@@ -1,0 +1,3 @@
+([('SafeSync',
+   '/Users/amine/Documents/TALK/Talk-client/dist/SafeSync',
+   'EXECUTABLE')],)
