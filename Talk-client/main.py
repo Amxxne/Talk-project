@@ -5,7 +5,7 @@ from gui import SafeSyncGUI
 from sync_client import SyncClient
 from watcher import FolderWatcher
 
-SERVER_HOST = "172.16.80.117"
+SERVER_HOST = "10.0.0.94"
 SYNC_FOLDER = os.path.expanduser("~/SafeSync")
 
 def main():
