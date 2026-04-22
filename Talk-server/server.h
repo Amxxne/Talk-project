@@ -14,7 +14,7 @@
  *  CONSTANTES
  * ========================================================= */
 
-#define PORT            5000      // Port d'écoute du serveur
+#define PORT            5003      // Port d'écoute du serveur
 #define MAX_CLIENTS     32        // Nombre max de clients simultanés
 #define BUFFER_SIZE     8192      // Taille des chunks de transfert (8 Ko)
 #define MAX_FILENAME    256       // Longueur max d'un nom de fichier

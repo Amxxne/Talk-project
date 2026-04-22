@@ -17,7 +17,7 @@ import time
 #  CONSTANTES — doivent être identiques à server.h !
 # ─────────────────────────────────────────────────────────────
 
-PORT         = 5000
+PORT         = 5003
 BUFFER_SIZE  = 8192   # Taille des chunks (8 Ko)
 MAX_FILENAME = 256
 HASH_SIZE    = 64
