@@ -14,7 +14,7 @@
  *  CONSTANTES
  * ========================================================= */
 
- #define PORT 5001     // Port d'écoute du serveur
+#define PORT            5000      // Port d'écoute du serveur
 #define MAX_CLIENTS     32        // Nombre max de clients simultanés
 #define BUFFER_SIZE     8192      // Taille des chunks de transfert (8 Ko)
 #define MAX_FILENAME    256       // Longueur max d'un nom de fichier
@@ -93,7 +93,7 @@ void server_run(int server_fd);
 void *client_handler(void *arg);
 
 // Notifie tous les autres clients qu'un fichier a changé
-void broadcast_notify(int sender_fd, const char *filename);
+void broadcast_notify(int sender_fd, const char *filename, uint8_t action);
 
 // Trouve un slot libre dans le tableau clients[]
 int  find_free_slot(void);

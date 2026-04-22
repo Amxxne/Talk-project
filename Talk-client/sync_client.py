@@ -17,7 +17,7 @@ import time
 #  CONSTANTES — doivent être identiques à server.h !
 # ─────────────────────────────────────────────────────────────
 
-PORT         = 5001
+PORT         = 5000
 BUFFER_SIZE  = 8192   # Taille des chunks (8 Ko)
 MAX_FILENAME = 256
 HASH_SIZE    = 64
@@ -137,6 +137,7 @@ class SyncClient:
         self.sync_folder  = sync_folder
         self.on_notify    = on_notify
         self.on_status    = on_status
+        self.on_connected = None  # sera défini depuis main.py
 
         self.sock         = None
         self.connected    = False
@@ -171,6 +172,8 @@ class SyncClient:
                 self.connected = True
 
             self._log(f"Connecté à {self.server_host}:{self.server_port}")
+            if self.on_connected:
+                self.on_connected(True)
             return True
 
         except (ConnectionRefusedError, OSError) as e:
@@ -187,6 +190,8 @@ class SyncClient:
                     pass
                 self.sock      = None
                 self.connected = False
+                if self.on_connected:
+                    self.on_connected(False)
 
     def _recv_all(self, n):
         """
@@ -346,11 +351,14 @@ class SyncClient:
 
         while self.connected:
             try:
-                # Lit l'opcode (1 octet)
+                # Lit l'opcode (1 octet) → doit être OP_NOTIFY
                 raw_opcode = self._recv_all(1)
                 opcode = raw_opcode[0]
 
                 if opcode == OP_NOTIFY:
+                    # Lit l'action (1 octet) : OP_UPLOAD ou OP_DELETE
+                    action = self._recv_all(1)[0]
+
                     # Lit la longueur du nom (2 octets)
                     raw_len  = self._recv_all(2)
                     name_len = struct.unpack('!H', raw_len)[0]
@@ -358,11 +366,23 @@ class SyncClient:
                     # Lit le nom du fichier
                     filename = self._recv_all(name_len).decode('utf-8')
 
-                    self._log(f"Notification reçue : '{filename}' a changé")
+                    if action == OP_UPLOAD:
+                        self._log(f"'{filename}' mis à jour par un collègue → téléchargement...")
+                        # Télécharge automatiquement le fichier dans ~/SafeSync
+                        self.download_file(filename)
+                        if self.on_notify:
+                            self.on_notify(filename)
 
-                    # Appelle le callback (ex: déclenche un download dans la GUI)
-                    if self.on_notify:
-                        self.on_notify(filename)
+                    elif action == OP_DELETE:
+                        self._log(f"'{filename}' supprimé par un collègue → suppression locale...")
+                        local_path = os.path.join(self.sync_folder, filename)
+                        if os.path.exists(local_path):
+                            os.remove(local_path)
+                            self._log(f"'{filename}' supprimé localement ✓")
+                        if self.on_notify:
+                            self.on_notify(filename)
+# Télécharge automatiquement le fichier mis à jour
+                            self.download_file(filename)
 
             except (ConnectionError, OSError):
                 self._log("Listener : connexion perdue")

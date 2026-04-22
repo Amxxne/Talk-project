@@ -2,6 +2,18 @@
 #include <sys/stat.h>
 #include <errno.h>
 
+/* Conversion portable big-endian → little-endian.
+   Fonctionne sur macOS ET Linux sans dépendance. */
+static uint16_t net_to_host16(uint16_t x) {
+    return (uint16_t)((x >> 8) | (x << 8));
+}
+static uint64_t net_to_host64(uint64_t x) {
+    return ((uint64_t)net_to_host16(x & 0xFFFF) << 48) |
+           ((uint64_t)net_to_host16((x >> 16) & 0xFFFF) << 32) |
+           ((uint64_t)net_to_host16((x >> 32) & 0xFFFF) << 16) |
+           ((uint64_t)net_to_host16((x >> 48) & 0xFFFF));
+}
+
 /* =========================================================
  *  POURQUOI recv() ET send() ET PAS read()/write() ?
  *
@@ -72,24 +84,25 @@ static void send_error(int fd, const char *msg) {
  *  On envoie juste l'opcode + le nom du fichier.
  * ========================================================= */
 
-void broadcast_notify(int sender_fd, const char *filename) {
+void broadcast_notify(int sender_fd, const char *filename, uint8_t action) {
     uint8_t  opcode   = OP_NOTIFY;
     uint16_t name_len = (uint16_t)strlen(filename);
 
     pthread_mutex_lock(&clients_mutex);
 
     for (int i = 0; i < MAX_CLIENTS; i++) {
-        // On saute le slot vide ET le client qui a envoyé le fichier
         if (!clients[i].active) continue;
         if (clients[i].socket_fd == sender_fd) continue;
 
-        // Envoi : [opcode 1o][name_len 2o][filename Xo]
+        // Envoi : [OP_NOTIFY 1o][action 1o][name_len 2o][filename Xo]
+        // 'action' = OP_UPLOAD ou OP_DELETE pour que le client sache quoi faire
         send_all(clients[i].socket_fd, &opcode,   sizeof(opcode));
+        send_all(clients[i].socket_fd, &action,   sizeof(action));
         send_all(clients[i].socket_fd, &name_len, sizeof(name_len));
         send_all(clients[i].socket_fd, filename,  name_len);
 
-        printf("[Broadcast] Notification '%s' → client %s\n",
-               filename, clients[i].ip);
+        printf("[Broadcast] Notification '%s' (action=0x%02X) → client %s\n",
+               filename, action, clients[i].ip);
     }
 
     pthread_mutex_unlock(&clients_mutex);
@@ -155,7 +168,7 @@ static void handle_upload(int client_fd, PacketHeader *hdr) {
     send_ack(client_fd);
 
     // Notifie les autres clients
-    broadcast_notify(client_fd, hdr->filename);
+    broadcast_notify(client_fd, hdr->filename, OP_UPLOAD);
 }
 
 /* =========================================================
@@ -223,7 +236,7 @@ static void handle_delete(int client_fd, PacketHeader *hdr) {
     if (remove(filepath) == 0) {
         printf("[Delete] '%s' supprimé.\n", hdr->filename);
         send_ack(client_fd);
-        broadcast_notify(client_fd, hdr->filename);
+        broadcast_notify(client_fd, hdr->filename, OP_DELETE);
     } else {
         send_error(client_fd, "Impossible de supprimer le fichier");
     }
@@ -255,6 +268,11 @@ void *client_handler(void *arg) {
             printf("[Thread] Client %s déconnecté.\n", client->ip);
             break;
         }
+
+        // Convertit les champs multi-octets de network byte order (big-endian)
+        // vers l'ordre natif de la machine (little-endian sur x86/ARM)
+        hdr.filename_len = net_to_host16(hdr.filename_len);
+        hdr.file_size    = net_to_host64(hdr.file_size);
 
         // Dispatch selon l'opcode reçu
         switch (hdr.opcode) {
