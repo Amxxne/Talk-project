@@ -1,0 +1,67 @@
+name: Build SafeSync
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+
+  # ─────────────────────────────────────────────────────────────
+  #  BUILD WINDOWS → SafeSync.exe
+  # ─────────────────────────────────────────────────────────────
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Récupère le code
+        uses: actions/checkout@v4
+
+      - name: Installe Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Installe les dépendances
+        run: |
+          pip install pyinstaller watchdog
+
+      - name: Compile le .exe
+        run: |
+          cd Talk-client
+          pyinstaller --onefile --windowed --name SafeSync main.py
+
+      - name: Upload l'artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SafeSync-Windows
+          path: Talk-client/dist/SafeSync.exe
+
+  # ─────────────────────────────────────────────────────────────
+  #  BUILD MACOS → SafeSync (binaire universel)
+  # ─────────────────────────────────────────────────────────────
+  build-macos:
+    runs-on: macos-latest
+
+    steps:
+      - name: Récupère le code
+        uses: actions/checkout@v4
+
+      - name: Installe Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Installe les dépendances
+        run: |
+          pip install pyinstaller watchdog
+
+      - name: Compile le binaire macOS
+        run: |
+          cd Talk-client
+          pyinstaller --onefile --windowed --name SafeSync main.py
+
+      - name: Upload l'artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SafeSync-macOS
+          path: Talk-client/dist/SafeSync
