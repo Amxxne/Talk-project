@@ -268,33 +268,59 @@ class SyncClient:
             self._log(f"'{filename}' supprimé sur le serveur ✓")
 
     def download_file(self, filename):
-        """Télécharge un fichier depuis le serveur."""
+        """
+        Télécharge un fichier depuis le serveur via une connexion dédiée.
+        On n'utilise PAS la socket principale pour ne pas interférer
+        avec le listener qui tourne en parallèle.
+        """
         self._log(f"Download de '{filename}'...")
 
-        header = build_header(OP_DOWNLOAD, filename, 0)
-        self._send_all(header)
+        try:
+            # Ouvre une connexion séparée juste pour ce téléchargement
+            dl_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            dl_sock.settimeout(10)
+            dl_sock.connect((self.server_host, self.server_port))
+            dl_sock.settimeout(None)
 
-        # Reçoit le header de réponse
-        raw = self._recv_all(HEADER_SIZE)
-        response = parse_header(raw)
+            def sock_recv_all(n):
+                data = b''
+                while len(data) < n:
+                    chunk = dl_sock.recv(n - len(data))
+                    if not chunk:
+                        raise ConnectionError("Connexion fermée")
+                    data += chunk
+                return data
 
-        if response['opcode'] == OP_ERROR:
-            self._log(f"Fichier '{filename}' introuvable sur le serveur")
-            return
+            # Envoie le header de demande
+            header = build_header(OP_DOWNLOAD, filename, 0)
+            dl_sock.sendall(header)
 
-        file_size = response['file_size']
-        dest_path = os.path.join(self.sync_folder, filename)
+            # Reçoit le header de réponse
+            raw      = sock_recv_all(HEADER_SIZE)
+            response = parse_header(raw)
 
-        # Reçoit le contenu par chunks
-        with open(dest_path, 'wb') as f:
-            remaining = file_size
-            while remaining > 0:
-                to_read = min(BUFFER_SIZE, remaining)
-                chunk   = self._recv_all(to_read)
-                f.write(chunk)
-                remaining -= len(chunk)
+            if response['opcode'] == OP_ERROR:
+                self._log(f"Fichier '{filename}' introuvable sur le serveur")
+                dl_sock.close()
+                return
 
-        self._log(f"'{filename}' téléchargé ✓")
+            file_size = response['file_size']
+            dest_path = os.path.join(self.sync_folder, filename)
+
+            # Reçoit le contenu par chunks et écrit sur disque
+            with open(dest_path, 'wb') as f:
+                remaining = file_size
+                while remaining > 0:
+                    to_read = min(BUFFER_SIZE, remaining)
+                    chunk   = sock_recv_all(to_read)
+                    f.write(chunk)
+                    remaining -= len(chunk)
+
+            dl_sock.close()
+            self._log(f"'{filename}' téléchargé dans {self.sync_folder} ✓")
+
+        except Exception as e:
+            self._log(f"Erreur download '{filename}' : {e}")
 
     # ─────────────────────────────────────────────────────────
     #  THREADS
@@ -381,8 +407,6 @@ class SyncClient:
                             self._log(f"'{filename}' supprimé localement ✓")
                         if self.on_notify:
                             self.on_notify(filename)
-# Télécharge automatiquement le fichier mis à jour
-                            self.download_file(filename)
 
             except (ConnectionError, OSError):
                 self._log("Listener : connexion perdue")
